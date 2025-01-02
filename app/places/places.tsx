@@ -1,21 +1,48 @@
+import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Image, Alert, StyleSheet } from 'react-native';
-import MapView, { Region, PROVIDER_GOOGLE, Marker } from 'react-native-maps';
+import { useRouter, useFocusEffect } from 'expo-router';
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Image,
+  Alert,
+  StyleSheet,
+  ActivityIndicator,
+} from 'react-native';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+
+import axiosInstance from '../axios';
+import { useLocation } from '../context/location';
 
 type LocationType = {
   latitude: number;
   longitude: number;
 };
 
-
 export default function AddLocationScreen() {
   const [name, setName] = useState('');
   const [image, setImage] = useState<string | null>(null);
-  const [location, setLocation] = useState<LocationType | null>(null);
+  const { location, setLocation } = useLocation();
+  const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+
+  const resetForm = useCallback(() => {
+    setName('');
+    setImage(null);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      resetForm();
+      return () => {
+        resetForm();
+      };
+    }, [resetForm])
+  );
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -57,30 +84,63 @@ export default function AddLocationScreen() {
   };
 
   const selectLocationOnMap = () => {
-    router.push('/Map/map');
+    if (location) {
+      router.push({
+        pathname: '/Map/map',
+        params: {
+          initialLatitude: location.latitude.toString(),
+          initialLongitude: location.longitude.toString(),
+        },
+      });
+    } else {
+      router.push('/Map/map');
+    }
   };
 
-  const handleAddLocation = () => {
+  const handleAddLocation = async () => {
     if (!name || !image || !location) {
       Alert.alert('Error', 'Please fill in all the fields.');
       return;
     }
 
-    db.transaction((tx: any) => {
-      tx.executeSql(
-        'INSERT INTO locations (name, image_uri, latitude, longitude) VALUES (?, ?, ?, ?);',
-        [name, image, location.latitude, location.longitude],
-        (_: any, success: any) => {
-          console.log('Location added to database successfully', success);
-          Alert.alert('Success', 'Location added successfully!');
-          router.back();
+    setIsLoading(true);
+    try {
+      const response = await fetch(image);
+      const blob = await response.blob();
+
+      const fileType = blob.type.split('/')[1] || 'jpeg';
+      const fileName = `uploaded_image.${fileType}`;
+
+      const formData = new FormData();
+      formData.append('title', name);
+      formData.append('latitude', location.latitude.toString());
+      formData.append('longitude', location.longitude.toString());
+      const file: File = {
+        uri: image,
+        type: blob.type,
+        name: fileName,
+      } as unknown as File;
+      formData.append('image', file);
+
+      const apiResponse = await axiosInstance.post('/places/upload-place', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
         },
-        (_: any, error: any) => {
-          console.log('Error inserting data', error);
-          Alert.alert('Error', 'Failed to add location to the database.');
-        }
-      );
-    });
+      });
+
+      if (apiResponse.status === 201 || apiResponse.status === 200) {
+        resetForm();
+        Alert.alert('Success', 'Place uploaded successfully!');
+        router.back();
+      } else {
+        Alert.alert('Error', 'Failed to upload place.');
+      }
+    } catch (error) {
+      console.error('Error uploading place:', error);
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -136,8 +196,15 @@ export default function AddLocationScreen() {
         </Text>
       )}
 
-      <TouchableOpacity className="rounded-md bg-orange-500 p-4" onPress={handleAddLocation}>
-        <Text className="text-center text-lg font-semibold text-white">Add Location</Text>
+      <TouchableOpacity
+        className="rounded-md bg-orange-500 p-4"
+        onPress={handleAddLocation}
+        disabled={isLoading}>
+        {isLoading ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Text className="text-center text-lg font-semibold text-white">Add Location</Text>
+        )}
       </TouchableOpacity>
     </View>
   );
